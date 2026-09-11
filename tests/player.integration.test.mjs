@@ -90,6 +90,50 @@ test('real nested player confirmation selects the active video and queue waits f
   assert.equal(await frame.locator('#vp1-video6').evaluate(video=>video.ended),true);
 });
 
+test('short intro switches to a different video before the real lecture completes', {timeout:12000}, async t=>{
+  const page=await fixture(t);
+  const events=[];
+  let active=0,maxActive=0;
+  await page.exposeFunction('recordSegment',(type,id)=>{
+    events.push(`${type}:${id}`);
+    if(type==='playing') {active++;maxActive=Math.max(maxActive,active);}
+    if(type==='ended') active--;
+  });
+  await page.route('**/*',async route=>{
+    const url=new URL(route.request().url());
+    const body=url.origin===LMS
+      ? '<iframe src="https://hycms.hanyang.ac.kr/em/segments" allow="autoplay"></iframe>'
+      : `<button class="vc-front-screen-play-btn" hidden>재생</button>
+        <div class="confirm-msg-box" hidden><div class="confirm-msg-text">이전에 시청했던 10:12부터 이어서 보시겠습니까?</div>
+        <div class="confirm-btn-wrapper"><button class="confirm-ok-btn">예</button></div></div>
+        ${Array.from({length:11},(_,i)=>`<video id="vp1-video${i}" muted style="${i===0?'width:320px;height:180px':'display:none'}"></video>`).join('')}
+        <script>
+        const intro=document.querySelector('#vp1-video0'),main=document.querySelector('#vp1-video6');
+        intro.src=${JSON.stringify(wav(0.1))};
+        intro.addEventListener('canplay',()=>{document.querySelector('.vc-front-screen-play-btn').hidden=false;},{once:true});
+        document.querySelector('.vc-front-screen-play-btn').onclick=()=>intro.play();
+        intro.addEventListener('playing',()=>window.recordSegment('playing','intro'));
+        intro.addEventListener('ended',async()=>{
+          await window.recordSegment('ended','intro');
+          document.querySelector('.confirm-msg-box').hidden=false;
+        });
+        document.querySelector('.confirm-ok-btn').onclick=async()=>{
+          document.querySelector('.confirm-msg-box').hidden=true;
+          intro.style.display='none';main.style.cssText='width:320px;height:180px';
+          main.src=${JSON.stringify(wav(1.3))};await main.play();
+        };
+        main.addEventListener('playing',()=>window.recordSegment('playing','main'));
+        main.addEventListener('ended',()=>window.recordSegment('ended','main'));
+        </script>`;
+    await route.fulfill({contentType:'text/html; charset=utf-8',body});
+  });
+  const result=await playEntry(page,{...entry('1'),durationSeconds:1.3},{stallMs:1000});
+  assert.equal(result.ended,true);
+  assert.ok(result.duration>=1.3);
+  assert.deepEqual(events,['playing:intro','ended:intro','playing:main','ended:main']);
+  assert.equal(maxActive,1);
+});
+
 test('unrelated dialog is not accepted because the page title mentions 이어서', {timeout:10000}, async t=>{
   const page=await fixture(t);
   let confirmations=0;

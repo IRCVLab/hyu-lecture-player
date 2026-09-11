@@ -43,12 +43,13 @@ export async function playEntry(page,entry,{log=()=>{},stallMs=120000}={}) {
   const end=Date.now()+30000;
   while(Date.now()<end) {
     await acknowledgePlaybackPrompt(frame,log);
-    const index=await frame.locator('video').evaluateAll(videos=>{
+    const index=await frame.locator('video').evaluateAll((videos,expectedDuration)=>{
       const candidates=videos.map((v,i)=>({v,i})).filter(({v})=>
-        !!(v.offsetWidth||v.offsetHeight)&&Number.isFinite(v.duration)&&v.duration>0);
+        !!(v.offsetWidth||v.offsetHeight)&&Number.isFinite(v.duration)&&v.duration>0&&
+        (!expectedDuration||v.duration>=expectedDuration-Math.min(1,expectedDuration*0.05)));
       candidates.sort((a,b)=>b.v.duration-a.v.duration);
       return candidates[0]?.i??-1;
-    });
+    },entry.durationSeconds);
     if(index>=0) {
       video=frame.locator('video').nth(index);
       if(await video.evaluate(v=>!v.paused)) break;
