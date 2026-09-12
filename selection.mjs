@@ -55,6 +55,7 @@ export function selectEntries(entries, { weeks, now = new Date() } = {}) {
     const selected = videos.filter(row => chosen.has(row.week)).sort((a, b) => a.week - b.week);
     for (const entry of selected) {
       const start = timestamp(entry.startsAt, 'startsAt', entry);
+      if (!entry.completed) timestamp(entry.dueAt, 'dueAt', entry);
       if (start > current) throw new Error(`Week ${entry.week} in course ${courseId} starts in the future`);
       if (!entry.completed && timestamp(entry.endsAt, 'endsAt', entry) < current) {
         throw new Error(`Playback end date expired for course ${courseId}, week ${entry.week}`);

@@ -1,7 +1,27 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
-import { extractRows, extractCourses } from '../browser.mjs';
+import { extractRows, extractCourses, readInventory, LMS } from '../browser.mjs';
+import {choosePlan} from '../terminal.mjs';
+import {selectEntries} from '../selection.mjs';
+import {Readable,Writable} from 'node:stream';
+
+test('inventory preserves unknown schedules so picker recommends valid videos only',async()=>{
+  const course={id:'1',name:'통계',year:2026};
+  const base={id:'1',href:'/courses/1/modules/items/1',title:'영상',week:1,kind:'video',completed:false,
+    startsText:'9월 1일 오전 00:00',dueText:'9월 14일 오후 11:59',endsText:'12월 21일 오후 11:59'};
+  const raw=[base,{...base,id:'2',startsText:''},{...base,id:'3',dueText:'날짜 없음'}];
+  const frame={url:()=>`${LMS}/learningx/lti/modulebuilder`,locator:()=>({first:()=>({waitFor:async()=>{}})}),evaluate:async()=>raw};
+  const page={goto:async()=>{},isClosed:()=>false,frames:()=>[frame]};
+  const rows=await readInventory(page,course);
+  assert.equal(rows[1].startsAt,null);assert.equal(rows[2].dueAt,null);
+  let text='';const output=new Writable({write(c,e,d){text+=c;d();}});
+  const now=new Date('2026-09-11');
+  const plan=await choosePlan([course],()=>readInventory(page,course),{input:Readable.from(['1\n\n보기\n']),output,now});
+  assert.deepEqual(plan.selected.map(r=>r.id),['1']);
+  assert.match(text,/일정 확인 필요/);
+  assert.throws(()=>selectEntries([rows[2]],{weeks:[1],now}),/schedule date/);
+});
 
 test('discover only current student courses and derive year from term',async()=>{
   const browser=await chromium.launch({channel:'chrome',headless:true});

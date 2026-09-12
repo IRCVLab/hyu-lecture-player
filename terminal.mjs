@@ -1,4 +1,15 @@
 import { createInterface } from 'node:readline';
+import {selectEntries} from './selection.mjs';
+import {formatPlanSummary} from './presentation.mjs';
+
+const validSchedule=row=>['startsAt','dueAt','endsAt'].every(field=>row[field]&&Number.isFinite(new Date(row[field]).getTime()));
+
+function recommendedEntries(entries,now) {
+  const time=new Date(now).getTime();
+  const playable=entries.filter(row=>row.kind==='video'&&!row.completed&&validSchedule(row)&&
+    Number.isInteger(row.week)&&row.week>0&&new Date(row.startsAt).getTime()<=time&&new Date(row.endsAt).getTime()>=time);
+  return [...new Set(playable.map(row=>row.courseId))].flatMap(id=>playable.filter(row=>row.courseId===id).sort((a,b)=>a.week-b.week));
+}
 
 export function parseChoices(text, allowed) {
   const value=text.trim();
@@ -25,7 +36,7 @@ export function summarizeWeeks(entries,{now=new Date()}={}) {
   }
   return [...courses.values()].flatMap(weeks=>[...weeks.values()].sort((a,b)=>a.week-b.week)).map(row=>{
     const pending=entries.filter(entry=>entry.courseId===row.courseId&&entry.week===row.week&&entry.kind==='video'&&!entry.completed);
-    const open=pending.filter(entry=>entry.startsAt&&entry.endsAt&&new Date(entry.startsAt).getTime()<=current&&new Date(entry.endsAt).getTime()>=current);
+    const open=pending.filter(entry=>validSchedule(entry)&&new Date(entry.startsAt).getTime()<=current&&new Date(entry.endsAt).getTime()>=current);
     let status;
     if(!row.pending&&!row.completed) status='영상 없음';
     else if(!row.pending) status='완료';
@@ -63,40 +74,70 @@ export async function choosePlan(courses,loadInventory,{input=process.stdin,outp
     }
   };
   try {
-    output.write('\n수강 과목을 선택하세요 (여러 개: 1,2 / 전체: all / 취소: q)\n');
+    output.write('\n[1/3] 수강 과목을 선택하세요 (여러 개: 1,2 / 전체: all / 취소: q)\n');
     courses.forEach((course,i)=>output.write(`${i+1}. ${course.name||course.title||course.id}${course.term?` (${course.term})`:''} [${course.id}]\n`));
-    const selected=await choices('과목 번호: ',courses.map((_,i)=>i+1));
-    if(selected===null) return null;
-    const chosen=selected.map(index=>courses[index-1]);
+    const courseChoices=await choices('과목 번호: ',courses.map((_,i)=>i+1));
+    if(courseChoices===null) return null;
+    const chosen=courseChoices.map(index=>courses[index-1]);
     const entries=[];
     for(const course of chosen) {
       if(signal?.aborted) return null;
+      output.write(`  ${course.name||course.id}의 주차 정보를 가져오는 중…\n`);
       entries.push(...await loadInventory(course));
     }
     if(signal?.aborted) return null;
     const summaries=summarizeWeeks(entries,{now});
     if(!summaries.length) throw new Error('선택한 과목에서 주차 정보를 찾지 못했습니다.');
-    output.write('\n주차별 영상 현황 (기한은 출석 인정 기한, 재생 완료와 출결은 별도입니다)\n');
+    const showWeeks=(details=false)=>{
+    output.write('\n[2/3] 주차별 영상 현황 (기한은 출석 인정 기한, 재생 완료와 출결은 별도입니다)\n');
     for(const course of chosen) {
       output.write(`\n${course.name||course.title||course.id}\n`);
       const actionable=summaries.filter(row=>row.courseId===course.id&&row.actionable).map(row=>row.week);
       output.write(`  지금 수강 필요: ${actionable.length?`${actionable.join(', ')}주차`:'없음'}\n`);
-      for(const row of summaries.filter(row=>row.courseId===course.id))
+      const unknown=entries.filter(row=>row.courseId===course.id&&row.kind==='video'&&!row.completed&&!validSchedule(row)).length;
+      if(unknown) output.write(`  일정 확인 필요: ${unknown}개 영상 (자동 추천 제외)\n`);
+      for(const row of summaries.filter(row=>row.courseId===course.id&&(details||row.actionable||row.status==='일정 확인 필요')))
         output.write(`  ${row.week}주차: ${row.status} / 미완료 ${row.pending}개 / 완료 ${row.completed}개 / 출석 기한: ${row.deadlines.length?row.deadlines.map(deadlineLabel).join(', '):'정보 없음'}\n`);
     }
+    if(!details) output.write('  완료·예정 주차를 포함한 전체 목록: d 입력\n');
+    };
+    showWeeks();
     const commonWeeks=[...new Set(summaries.map(row=>row.week))]
       .filter(week=>chosen.every(course=>summaries.some(row=>row.courseId===course.id&&row.week===week)))
       .sort((a,b)=>a-b);
-    if(!commonWeeks.length) throw new Error('공통으로 있는 주차가 없습니다. 과목을 따로 선택해 주세요.');
-    output.write(`\n선택한 모든 과목에 공통으로 있는 주차: ${commonWeeks.join(', ')}\n`);
-    const weeks=await choices('주차 번호 (예: 1 2, 전체: all, 취소: q): ',commonWeeks);
-    if(weeks===null) return null;
-    const pending=summaries.filter(row=>weeks.includes(row.week)).reduce((sum,row)=>sum+row.pending,0);
-    output.write(`\n${chosen.length}개 과목 / ${weeks.join(', ')}주차 / 미완료 영상 ${pending}개\n`);
+    output.write(commonWeeks.length?`\n선택한 모든 과목에 공통으로 있는 주차: ${commonWeeks.join(', ')}\n`:
+      '\n공통 주차가 없어도 Enter로 과목별 미완료 영상을 추천받을 수 있습니다.\n');
+    let weeks,selected,recommended=false;
+    for(;;) {
+      const answer=(await ask('Enter: 지금 가능한 미완료 추천 / 주차 직접 입력: 1 2 / 전체 목록: d / 취소: q\n선택: ')).trim();
+      if(/^(d|상세)$/i.test(answer)) {showWeeks(true);continue;}
+      if(answer==='') {
+        selected=recommendedEntries(entries,now);recommended=true;
+        if(!selected.length) {output.write('지금 재생할 미완료 영상이 없습니다. 일정 확인 필요 항목은 LMS에서 확인하세요.\n');return null;}
+        break;
+      }
+      try {
+        weeks=parseChoices(answer,commonWeeks);
+        if(weeks===null) return null;
+        if(!weeks.length) throw new Error('공통 주차가 없습니다. Enter 추천을 사용하거나 과목을 따로 선택하세요.');
+        selected=selectEntries(entries,{weeks,now});
+        break;
+      } catch(error) {
+        const message=/future/.test(error.message)?'아직 공개되지 않은 영상이 있습니다. 다른 주차를 선택하세요.':
+          /expired/.test(error.message)?'열람이 종료된 영상이 있습니다. 다른 주차를 선택하세요.':
+          /schedule date/.test(error.message)?'일정 확인이 필요한 영상이 있습니다. LMS 일정을 확인하거나 Enter 추천을 사용하세요.':error.message;
+        output.write(`${message}\n`);
+      }
+    }
+    const summaryRows=recommended?[...selected,...entries.filter(row=>row.kind==='video'&&row.completed&&
+      selected.some(item=>item.courseId===row.courseId&&item.week===row.week))]:selected;
+    output.write(formatPlanSummary(summaryRows,{now})+'\n');
+    output.write('[3/3] 아래에서 확인해야 재생을 시작합니다.\n');
     for(;;) {
       const answer=(await ask(list?'목록 확인 (Enter), 취소 (q): ':'보기 (Enter 또는 보기): 영상을 한 편씩 순서대로 재생합니다. 취소 (q): ')).trim();
       if(/^(q|quit|취소)$/i.test(answer)) return null;
-      if(answer===''||answer==='보기'||(list&&answer==='목록 확인')) return {courses:chosen,entries,weeks};
+      if(answer===''||answer==='보기'||(list&&answer==='목록 확인'))
+        return recommended?{courses:chosen,entries,selected}:{courses:chosen,entries,weeks};
       output.write('시작하려면 Enter를 누르고, 취소하려면 q를 입력하세요.\n');
     }
   } finally {

@@ -1,5 +1,5 @@
 export function parseOptions(args) {
-  const options={weeks:undefined,course:undefined,list:false,help:false,status:false,nonInteractive:false,current:false};
+  const options={weeks:undefined,course:undefined,list:false,help:false,status:false,nonInteractive:false,current:false,check:false,json:false};
   for(let i=0;i<args.length;i++) {
     const arg=args[i];
     if(arg==='--weeks') {
@@ -18,12 +18,16 @@ export function parseOptions(args) {
     } else if(arg==='--list') options.list=true;
     else if(arg==='--help'||arg==='-h') options.help=true;
     else if(arg==='--status') options.status=true;
+    else if(arg==='--check') options.check=true;
+    else if(arg==='--json') options.json=true;
     else if(arg==='--non-interactive') options.nonInteractive=true;
     else if(arg==='--current') options.current=true;
     else throw new Error(`알 수 없는 옵션: ${arg}`);
   }
   if(options.current&&options.weeks) throw new Error('--current와 --weeks는 함께 사용할 수 없습니다.');
-  if(options.nonInteractive&&!options.help&&!options.status&&!options.list&&(!options.course||(!options.weeks&&!options.current)))
+  if(options.json&&!options.status) throw new Error('--json은 --status와 함께 사용하세요.');
+  if(options.check&&(options.status||options.course||options.weeks||options.current||options.list)) throw new Error('--check는 재생/조회 옵션과 함께 사용할 수 없습니다.');
+  if(options.nonInteractive&&!options.help&&!options.status&&!options.list&&!options.check&&(!options.course||(!options.weeks&&!options.current)))
     throw new Error('--non-interactive 재생에는 --course ID|all과 --weeks 1 2 또는 --current가 필요합니다.');
   return options;
 }

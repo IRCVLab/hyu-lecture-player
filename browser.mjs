@@ -69,14 +69,18 @@ export async function readInventory(page,course) {
   const frame=await waitForFrame(page,f=>f.url().startsWith(`${LMS}/learningx/lti/modulebuilder`));
   await frame.locator('.xnmb-module-list .xnmb-module-title').first().waitFor();
   const rows=await frame.evaluate(extractRows);
+  const dateOrUnknown=text=>{
+    if(!text) return null;
+    try {return parseKoreanDate(text,course.year);} catch {return null;}
+  };
   const result=rows.map(row=>({
     ...row,courseId:course.id,courseName:course.name,courseYear:course.year,
     url:row.href?new URL(row.href,LMS).href:null,
-    startsAt:row.startsText?parseKoreanDate(row.startsText,course.year):null,
-    dueAt:row.dueText?parseKoreanDate(row.dueText,course.year):null,
-    endsAt:row.endsText?parseKoreanDate(row.endsText,course.year):null,
+    startsAt:dateOrUnknown(row.startsText),
+    dueAt:dateOrUnknown(row.dueText),
+    endsAt:dateOrUnknown(row.endsText),
   }));
-  if(result.some(r=>r.kind==='video'&&(!r.id||!r.week||!r.url||!r.startsAt||!r.dueAt||!r.endsAt)))
+  if(result.some(r=>r.kind==='video'&&(!r.id||!r.week||!r.url)))
     throw new Error(`${course.name}: 영상 메타데이터를 해석하지 못했습니다. 자동 재생을 중단합니다.`);
   return result;
 }
