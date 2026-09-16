@@ -54,9 +54,89 @@ function deadlineLabel(value) {
   return new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}).format(date);
 }
 
+const weekKey=row=>`${row.courseId}:${row.week}`;
+
+export async function chooseAccount(accounts,{input=process.stdin,output=process.stdout,signal}={}) {
+  if(signal?.aborted||!accounts.length) return null;
+  const {canUseKeyMenu,keyMenu}=await import('./key-menu.mjs');
+  if(signal?.aborted) return null;
+  if(canUseKeyMenu(input,output)) {
+    const chosen=await keyMenu({title:'로그인 신분 선택',items:accounts.map((account,i)=>({value:String(i),label:account.label})),input,output,signal});
+    return chosen?accounts[Number(chosen[0])].index:null;
+  }
+  const rl=createInterface({input,output,terminal:false});
+  const onAbort=()=>rl.close();signal?.addEventListener('abort',onAbort,{once:true});
+  try {
+    output.write('\n로그인 신분 선택\n');
+    accounts.forEach((account,i)=>output.write(`${i+1}. ${account.label}\n`));
+    output.write('계정 번호 (취소: q): ');
+    for await(const answer of rl) {
+      if(signal?.aborted||/^(q|취소)$/i.test(answer.trim())) return null;
+      const selected=Number(answer.trim())-1;
+      if(Number.isInteger(selected)&&accounts[selected]) return accounts[selected].index;
+      output.write('표시된 계정 번호를 입력하세요 (취소: q): ');
+    }
+    return null;
+  } finally {signal?.removeEventListener('abort',onAbort);rl.close();}
+}
+
+export function buildWeekChoices(entries,{now=new Date()}={}) {
+  const playable=recommendedEntries(entries,now);
+  const summaries=summarizeWeeks(entries,{now});
+  const items=summaries.map(row=>{
+    const videos=playable.filter(entry=>weekKey(entry)===weekKey(row));
+    const course=entries.find(entry=>entry.courseId===row.courseId);
+    return {value:weekKey(row),label:`${row.week}주차 | ${course?.courseName||row.courseId}`,
+      description:`${row.status} · 미완료 ${row.pending}개 / 완료 ${row.completed}개 · 출석 기한 ${row.deadlines.length?row.deadlines.map(deadlineLabel).join(', '):'확인 필요'}`,
+      disabled:!videos.length,recommended:!!videos.length,
+      warning:videos.some(entry=>new Date(entry.dueAt)<now)};
+  });
+  const current=playable.find(entry=>new Date(entry.dueAt)>=now);
+  let initialIndex=items.findIndex(item=>item.value===weekKey(current||playable[0]||{}));
+  if(initialIndex<0) initialIndex=0;
+  return {items,initialIndex,initialSelected:items.filter(item=>!item.disabled).map(item=>item.value)};
+}
+
+export async function chooseArrowPlan(courses,loadInventory,{menu,input=process.stdin,output=process.stdout,list=false,signal,now=new Date()}={}) {
+  if(signal?.aborted) return null;
+  const shared={input,output,signal};
+  const picked=await menu({...shared,title:'[1/3] 수강 과목 선택',multiple:true,selectFocusedOnEmpty:true,
+    items:courses.map(course=>({value:course.id,label:course.name||course.title||course.id,description:course.term||''}))});
+  if(!picked||signal?.aborted) return null;
+  const chosen=courses.filter(course=>picked.includes(course.id));
+  const entries=[];
+  for(const course of chosen) {
+    if(signal?.aborted) return null;
+    output.write(`  ${course.name||course.id}의 주차 정보를 가져오는 중…\n`);
+    entries.push(...await loadInventory(course));
+  }
+  if(signal?.aborted) return null;
+  const model=buildWeekChoices(entries,{now});
+  const unknown=entries.filter(row=>row.kind==='video'&&!row.completed&&!validSchedule(row)).length;
+  if(unknown) output.write(`일정 확인 필요: ${unknown}개 영상은 자동 선택에서 제외됩니다.\n`);
+  if(!model.initialSelected.length) {
+    output.write('지금 재생할 미완료 영상이 없습니다.\n');
+    for(const item of model.items) output.write(`  ${item.label}: ${item.description}\n`);
+    return null;
+  }
+  const weeks=await menu({...shared,...model,title:'[2/3] 주차 선택 — 필요한 주차가 기본 체크되어 있습니다',multiple:true});
+  if(!weeks?.length||signal?.aborted) return null;
+  const selected=recommendedEntries(entries,now).filter(row=>weeks.includes(weekKey(row)));
+  if(!selected.length) return null;
+  const summaryRows=[...selected,...entries.filter(row=>row.kind==='video'&&row.completed&&weeks.includes(weekKey(row)))];
+  output.write(formatPlanSummary(summaryRows,{now})+'\n');
+  const action=await menu({...shared,title:'[3/3] 선택한 영상을 한 편씩 순서대로 진행합니다',
+    items:[{value:'play',label:list?'목록 확인':'보기',description:list?'재생하지 않고 목록만 확인합니다':'LMS 완료 표시를 확인한 뒤 다음 영상으로 이동합니다'},
+      {value:'cancel',label:'취소'}]});
+  if(action?.[0]!=='play'||signal?.aborted) return null;
+  return {courses:chosen,entries,selected};
+}
+
 export async function choosePlan(courses,loadInventory,{input=process.stdin,output=process.stdout,list=false,signal,now=new Date()}={}) {
   if(signal?.aborted) return null;
   if(!courses.length) throw new Error('선택할 수 있는 수강 과목이 없습니다.');
+  const {canUseKeyMenu,keyMenu}=await import('./key-menu.mjs');
+  if(canUseKeyMenu(input,output)) return chooseArrowPlan(courses,loadInventory,{menu:keyMenu,input,output,list,signal,now});
   const rl=createInterface({input,output,terminal:!!input.isTTY});
   const lines=rl[Symbol.asyncIterator]();
   const onAbort=()=>rl.close();

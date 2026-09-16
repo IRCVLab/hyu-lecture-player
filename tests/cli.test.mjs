@@ -15,6 +15,7 @@ function run(dir,args,env=process.env) {return spawnSync(process.execPath,['cli.
 test('help and readable status work without Playwright installed',async t=>{
   const dir=await fixture(t);
   const help=run(dir,['--help']);assert.equal(help.status,0,help.stderr);assert.match(help.stdout,/--check/);
+  assert.match(help.stdout,/↑↓.*Space.*Enter/);
   await mkdir(join(dir,'.private'));
   await writeFile(join(dir,'.private/status.json'),JSON.stringify({phase:'completed',pid:99999999,selected:[],final:[{id:'1',completed:true,attendance:'결석'}]}));
   const human=run(dir,['--status']);assert.equal(human.status,0,human.stderr);assert.match(human.stdout,/LMS 완료 1\/1개/);

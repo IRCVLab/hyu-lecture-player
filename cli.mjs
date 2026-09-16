@@ -1,13 +1,12 @@
 import {chmod,mkdir,readFile,writeFile,rename,open,unlink,appendFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {join,dirname} from 'node:path';
-import {createInterface} from 'node:readline/promises';
 import {ensureLogin,loadCredentials,promptCredentials} from './auth.mjs';
 import {LMS,discoverCourses,readInventory,verifyCompletion} from './browser.mjs';
 import {selectEntries} from './selection.mjs';
 import {playEntry,runQueue} from './player.mjs';
 import {parseOptions} from './options.mjs';
-import {choosePlan} from './terminal.mjs';
+import {choosePlan,chooseAccount} from './terminal.mjs';
 import {checkSetup,formatSetupReport} from './setup.mjs';
 import {formatStatus,formatPlanSummary,createConsoleReporter} from './presentation.mjs';
 
@@ -58,6 +57,7 @@ async function acquireLock() {
 async function main() {
   const options=parseOptions(process.argv.slice(2));
   if(options.help) {
+    console.log('메뉴 조작: ↑↓ 이동 · Space 선택/해제 · Enter 확정 · Esc/q 취소\n필요한 미완료 주차는 기본 체크·강조됩니다. 일반 터미널에서는 번호 입력이 필요 없습니다.');
     console.log(`한양대 주차별 강의 자동 재생 (브라우저 표시)\n\n./run.sh                         로그인 → 과목 → 추천 주차 → 보기\n./run.sh --check                 설치·화면 환경 점검 (로그인/재생 없음)\n./run.sh --course ID --weeks 1 2  지정 과목/주차 순차 재생\n./run.sh --course ID --current   지정 과목의 이번 주차\n./run.sh --list                  재생 없이 과목/주차 목록 확인\n./run.sh --status                읽기 쉬운 현재/마지막 실행 결과\n./run.sh --status --json         상세 JSON 결과\n\nWindows: run.cmd / macOS: run.command도 사용할 수 있습니다.\n--course all: 현재 수강 과목 전체. --non-interactive: 터미널 질문 없이 지정 옵션으로 실행.\n완료된 영상은 제외합니다. 한 번에 한 영상만 정상 속도로 끝까지 재생한 뒤 LMS 완료 표시를 확인합니다.\n중단: Ctrl+C. 다시 실행하면 서버의 최신 완료 상태를 확인합니다.`);
     return;
   }
@@ -92,17 +92,9 @@ async function main() {
   if(!await loadCredentials(privateDir)&&page.url().startsWith('https://api.hanyang.ac.kr/oauth/login')&&!options.nonInteractive)
     credentials=await promptCredentials({signal:cancellation.signal});
   const selectAccount=options.nonInteractive?undefined:async (accounts,{signal})=>{
-    const rl=createInterface({input:process.stdin,output:process.stdout});
-    try {
-      console.log('\n로그인 계정 선택');
-      accounts.forEach((a,i)=>console.log(`${i+1}. ${a.label}`));
-      for(;;) {
-        const answer=await rl.question('계정 번호 (취소: q): ',{signal});
-        if(answer.trim()==='q') throw new Error('계정 선택을 취소했습니다.');
-        const selected=Number(answer)-1;
-        if(Number.isInteger(selected)&&accounts[selected]) return accounts[selected].index;
-      }
-    } finally {rl.close();}
+    const selected=await chooseAccount(accounts,{signal});
+    if(selected===null) throw new Error('계정 선택을 취소했습니다.');
+    return selected;
   };
   await ensureLogin(page,{privateDir,log,credentials,selectAccount,signal:cancellation.signal});
   log('학생 계정 로그인 확인');
