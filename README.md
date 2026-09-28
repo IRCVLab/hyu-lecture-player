@@ -4,7 +4,7 @@
 
 ## 실행하기
 
-1. [Node.js](https://nodejs.org/) **22 이상**과 [Google Chrome](https://www.google.com/chrome/)을 설치하세요.
+1. [Node.js](https://nodejs.org/) **22 이상**을 설치하세요. 브라우저는 **Chrome · Edge · Brave · Chromium** 중 하나가 있으면 됩니다.
 2. 받은 파일을 압축 해제하고, 아래 실행 파일을 여세요.
 
 | 운영체제 | 실행 |
@@ -13,7 +13,7 @@
 | Windows | `run.cmd` 더블클릭 |
 | Linux | 터미널에서 `bash run.sh` |
 
-처음에는 필요한 패키지를 자동 설치합니다. 다음부터도 같은 파일만 실행하세요.
+브라우저는 **Chrome → Edge → Brave → Chromium** 순서로 자동 탐지·실행합니다. 선택할 필요 없습니다. 처음에는 필요한 패키지를 자동 설치하며, 다음부터도 같은 파일만 실행하세요.
 
 ## 강의 보기
 
@@ -31,7 +31,7 @@
 
 ## 실행이 안 되나요?
 
-- **Mac에서 Chrome을 못 찾으면:** `Google Chrome.app`을 **응용 프로그램(`/Applications`)** 폴더에 설치하고 다시 실행하세요. Safari만으로는 실행되지 않습니다.
+- **브라우저를 못 찾으면:** 지원 브라우저를 기본 위치에 설치하세요. Mac은 앱을 **응용 프로그램** 폴더로 옮기세요. 없다면 [Chrome 설치](https://www.google.com/chrome/)를 권장합니다. Safari는 지원하지 않습니다.
 - **Node.js 설치 후에도 오류가 나면:** 터미널을 닫고 다시 여세요.
 - **그 밖의 오류:** `bash run.sh --check` 결과를 알려주세요. Windows는 `run.cmd --check`입니다.
 
@@ -41,6 +41,8 @@
 <summary>개발·지원 범위</summary>
 
 한양대 LearningX 대상입니다. 실제 사이트 검증은 Linux/Chrome에서 진행했으며, Mac/Windows 실기기 검증은 아직입니다.
+
+Brave·Chromium은 설치 경로를 자동 탐지하지만, 버전·영상 코덱에 따라 재생 호환성이 다를 수 있습니다. 문제가 있으면 Chrome을 사용하세요.
 
 개발 실행: `npm ci` → `npm start` · 테스트: `npm test`
 

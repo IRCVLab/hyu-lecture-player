@@ -71,7 +71,7 @@ async function main() {
   if(options.check||!setup.ok) console.log(formatSetupReport(setup));
   if(!setup.ok) {process.exitCode=1;return;}
   if(options.check) return;
-  console.log('\nHYU Lecture Player — 로그인 → 과목 → 주차 추천 → 보기\n환경 점검 통과. Chrome을 여는 중…');
+  console.log(`\nHYU Lecture Player — 로그인 → 과목 → 주차 추천 → 보기\n환경 점검 통과. ${setup.browserName}을 여는 중…`);
   let chromium;
   try {({chromium}=await import('playwright'));}
   catch {throw new Error('필요한 패키지가 없습니다. 실행 파일(run.sh/run.cmd/run.command)로 시작하거나 npm ci를 실행하세요.');}
@@ -79,9 +79,13 @@ async function main() {
   await acquireLock();
   state.options=options;
   await saveStatus();
-  context=await chromium.launchPersistentContext(join(privateDir,'profile'),{
-    executablePath:setup.executablePath,headless:false,viewport:{width:1400,height:1000},
-  });
+  try {
+    context=await chromium.launchPersistentContext(join(privateDir,setup.profileDirectory),{
+      executablePath:setup.executablePath,headless:false,viewport:{width:1400,height:1000},
+    });
+  } catch (error) {
+    throw new Error(`${setup.browserName} 실행에 실패했습니다. 이전 자동화 창을 닫고 브라우저 설치·업데이트 상태를 확인한 뒤 다시 실행하세요.\n${error.message}`,{cause:error});
+  }
   context.setDefaultTimeout(30000);
   const page=context.pages()[0]||await context.newPage();
   for(const extra of context.pages().slice(1)) await extra.close();

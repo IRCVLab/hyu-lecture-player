@@ -35,7 +35,14 @@ test('setup check works without Playwright and never creates private data',async
 test('offline full CLI carries per-course recommendation through final verification',async t=>{
   const dir=await fixture(t);
   // Boundary fixtures replace external login/browser/media only. The real CLI and picker run unchanged.
-  await writeFile(join(dir,'setup.mjs'),`export async function checkSetup(){return {ok:true,executablePath:'fixture'}};export function formatSetupReport(){return 'fixture'};`);
+  await writeFile(join(dir,'setup.mjs'),`
+    export async function checkSetup(){
+      const browserId=process.env.HYU_TEST_BROWSER||'brave';
+      return {ok:true,executablePath:'fixture',browserId,
+        browserName:({chrome:'Google Chrome',edge:'Microsoft Edge',brave:'Brave',chromium:'Chromium'})[browserId],
+        profileDirectory:browserId==='chrome'?'profile':'profile-'+browserId};
+    };export function formatSetupReport(){return 'fixture'};
+  `);
   await writeFile(join(dir,'auth.mjs'),`export async function ensureLogin(){};export async function loadCredentials(){return {}};export async function promptCredentials(){throw Error('unexpected prompt')};`);
   await writeFile(join(dir,'browser.mjs'),`
     export const LMS='https://fixture.invalid';
@@ -65,14 +72,36 @@ test('offline full CLI carries per-course recommendation through final verificat
   const dependency=join(dir,'node_modules/playwright');await mkdir(dependency,{recursive:true});
   await writeFile(join(dependency,'package.json'),JSON.stringify({type:'module',exports:'./index.mjs'}));
   await writeFile(join(dependency,'index.mjs'),`
+    import {writeFile} from 'node:fs/promises';
     const page={goto:async()=>({status:()=>200}),url:()=> 'https://fixture.invalid/courses'};
-    export const chromium={launchPersistentContext:async()=>({setDefaultTimeout(){},pages:()=>[page],close:async()=>{}})};
+    export const chromium={launchPersistentContext:async(profile,options)=>{
+      await writeFile('launch.json',JSON.stringify({profile,options}));
+      if(process.env.HYU_TEST_LAUNCH_FAIL)throw Error('fixture launch failure');
+      return {setDefaultTimeout(){},pages:()=>[page],close:async()=>{}};
+    }};
   `);
   const result=spawnSync(process.execPath,['cli.mjs'],{cwd:dir,encoding:'utf8',input:'all\n\n보기\n',timeout:10000});
   assert.equal(result.status,0,result.stderr);assert.match(result.stdout,/LMS 완료 2\/2개/);
   const {readFile}=await import('node:fs/promises');
+  assert.match(result.stdout,/Brave을 여는 중/);
+  assert.deepEqual(JSON.parse(await readFile(join(dir,'launch.json'),'utf8')),{
+    profile:join(dir,'.private/profile-brave'),options:{executablePath:'fixture',headless:false,viewport:{width:1400,height:1000}},
+  });
   const state=JSON.parse(await readFile(join(dir,'.private/status.json'),'utf8'));
   assert.equal(state.phase,'completed');assert.deepEqual(state.final.map(r=>r.week),[1,2]);
+  await assert.rejects(access(join(dir,'.private/run.lock')));
+  for(const [id,name] of [['chrome','Google Chrome'],['edge','Microsoft Edge'],['chromium','Chromium']]) {
+    const selected=spawnSync(process.execPath,['cli.mjs'],{cwd:dir,encoding:'utf8',input:'all\n\n보기\n',timeout:10000,
+      env:{...process.env,HYU_TEST_BROWSER:id}});
+    assert.equal(selected.status,0,selected.stderr);
+    assert.ok(selected.stdout.includes(`${name}을 여는 중`));
+    const launched=JSON.parse(await readFile(join(dir,'launch.json'),'utf8'));
+    assert.equal(launched.profile,join(dir,'.private',id==='chrome'?'profile':`profile-${id}`));
+  }
+  const launchFailed=spawnSync(process.execPath,['cli.mjs'],{cwd:dir,encoding:'utf8',timeout:10000,
+    env:{...process.env,HYU_TEST_LAUNCH_FAIL:'1'}});
+  assert.equal(launchFailed.status,1);
+  assert.match(launchFailed.stderr,/Brave.*실행.*실패/);
   await assert.rejects(access(join(dir,'.private/run.lock')));
   for(const mode of ['missing','future','expired']) {
     const changed=spawnSync(process.execPath,['cli.mjs'],{cwd:dir,encoding:'utf8',input:'all\n\n보기\n',timeout:10000,

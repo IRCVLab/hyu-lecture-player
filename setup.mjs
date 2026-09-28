@@ -1,30 +1,56 @@
-import {access as fsAccess} from 'node:fs/promises';
+import {access as fsAccess, stat as fsStat} from 'node:fs/promises';
 import {constants} from 'node:fs';
-import {dirname, join, resolve, win32} from 'node:path';
+import {dirname, join, resolve, win32, posix} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
-function chromeCandidates(platform, env) {
+const browsers = [
+  {id:'chrome', name:'Google Chrome', mac:'Google Chrome', windows:['Google','Chrome','Application','chrome.exe'],
+    linux:['google-chrome','google-chrome-stable'], opt:'/opt/google/chrome/chrome'},
+  {id:'edge', name:'Microsoft Edge', mac:'Microsoft Edge', windows:['Microsoft','Edge','Application','msedge.exe'],
+    linux:['microsoft-edge','microsoft-edge-stable'], opt:'/opt/microsoft/msedge/msedge'},
+  {id:'brave', name:'Brave', mac:'Brave Browser', windows:['BraveSoftware','Brave-Browser','Application','brave.exe'],
+    linux:['brave-browser','brave-browser-stable','brave'], opt:'/opt/brave.com/brave/brave'},
+  {id:'chromium', name:'Chromium', mac:'Chromium', windows:['Chromium','Application','chrome.exe'],
+    linux:['chromium','chromium-browser']},
+];
+
+function browserCandidates(browser, platform, env) {
   if (platform === 'win32') return [env.ProgramFiles, env['ProgramFiles(x86)'], env.LOCALAPPDATA]
-    .filter(Boolean).map(root => win32.join(root, 'Google', 'Chrome', 'Application', 'chrome.exe'));
-  if (platform === 'darwin') return ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    ...(env.HOME ? [join(env.HOME, 'Applications/Google Chrome.app/Contents/MacOS/Google Chrome')] : [])];
-  if (platform === 'linux') return ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/opt/google/chrome/chrome'];
+    .filter(root=>root && win32.isAbsolute(root)).map(root=>win32.join(root,...browser.windows));
+  if (platform === 'darwin') return ['/Applications',
+    ...(env.HOME && posix.isAbsolute(env.HOME) ? [posix.join(env.HOME,'Applications')] : [])]
+    .map(root=>posix.join(root,`${browser.mac}.app`,'Contents','MacOS',browser.mac));
+  if (platform === 'linux') {
+    const roots=['/usr/bin','/usr/local/bin','/snap/bin',...(env.PATH||'').split(':').filter(p=>posix.isAbsolute(p))];
+    return [...roots.flatMap(root=>browser.linux.map(name=>posix.join(root,name))),...(browser.opt?[browser.opt]:[])];
+  }
   return [];
 }
 
 // Read-only checks: never opens Chrome, creates private data, or installs software.
 export async function checkSetup({platform = process.platform, env = process.env,
   nodeVersion = process.versions.node, projectDir = dirname(fileURLToPath(import.meta.url)),
-  privateDir = join(projectDir, '.private'), access = fsAccess} = {}) {
+  privateDir = join(projectDir, '.private'), access = fsAccess, stat = fsStat} = {}) {
   const checks = [];
   const nodeOK = Number(nodeVersion.split('.')[0]) >= 22;
   checks.push({id:'node', ok:nodeOK, message:`Node.js ${nodeVersion}`, ...(!nodeOK && {remedy:'Node.js 22 이상 LTS를 https://nodejs.org/ 에서 설치한 뒤 터미널을 다시 여세요.'})});
-  let executablePath;
-  for (const candidate of chromeCandidates(platform, env)) {
-    try { await access(candidate, platform === 'win32' ? constants.F_OK : constants.X_OK); executablePath = candidate; break; } catch {}
+  let executablePath, browserId, browserName, profileDirectory;
+  for (const browser of browsers) {
+    for (const candidate of new Set(browserCandidates(browser,platform,env))) {
+      try {
+        await access(candidate, platform === 'win32' ? constants.F_OK : constants.X_OK);
+        if (!(await stat(candidate)).isFile()) continue;
+        executablePath=candidate;
+        browserId=browser.id;
+        browserName=browser.name;
+        profileDirectory=browser.id==='chrome'?'profile':`profile-${browser.id}`;
+        break;
+      } catch {}
+    }
+    if (executablePath) break;
   }
-  checks.push({id:'chrome', ok:!!executablePath, message:executablePath ? `Chrome: ${executablePath}` : 'Chrome을 찾을 수 없습니다.',
-    ...(!executablePath && {remedy:'https://www.google.com/chrome/ 에서 Google Chrome을 기본 위치에 설치하세요.'})});
+  checks.push({id:'browser', ok:!!executablePath, message:executablePath ? `${browserName}: ${executablePath}` : '지원 브라우저를 찾을 수 없습니다 (Chrome · Edge · Brave · Chromium).',
+    ...(!executablePath && {remedy:'https://www.google.com/chrome/ 에서 Chrome을 설치하거나 Edge·Brave·Chromium을 기본 위치에 설치하세요. Mac은 앱을 응용 프로그램 폴더로 옮긴 뒤 다시 실행하세요.'})});
   if (platform === 'linux') {
     const ok = !!(env.DISPLAY || env.WAYLAND_DISPLAY);
     checks.push({id:'display',ok,message:ok ? '그래픽 화면 환경이 설정되어 있습니다.' : '그래픽 화면 환경이 없습니다.',
@@ -39,7 +65,7 @@ export async function checkSetup({platform = process.platform, env = process.env
   } catch { storageOK = false; }
   checks.push({id:'storage',ok:storageOK,message:storageOK ? '프로그램과 개인 데이터 저장 위치에 쓰기 권한이 있습니다.' : '저장 위치의 쓰기 권한을 확인할 수 없습니다.',
     ...(!storageOK && {remedy:'압축을 완전히 풀고 내 문서 등 쓰기 가능한 폴더로 프로그램을 옮긴 후 다시 실행하세요.'})});
-  return {ok:checks.every(check=>check.ok),executablePath,checks};
+  return {ok:checks.every(check=>check.ok),executablePath,browserId,browserName,profileDirectory,checks};
 }
 
 export function formatSetupReport(result) {
